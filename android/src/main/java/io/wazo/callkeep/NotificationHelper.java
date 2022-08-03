@@ -93,7 +93,7 @@ public class NotificationHelper {
         final String name;
         try {
             // JS issue with Strings: (e.g. transforms '%20's to spaces)
-            return URLDecoder.decode(callerName, "UTF-8");
+            name = URLDecoder.decode(callerName, "UTF-8");
         } catch (UnsupportedEncodingException e) {
             return callerName;
         }
