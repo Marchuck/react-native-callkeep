@@ -26,5 +26,10 @@ public class Constants {
     // Can't use telecom.EXTRA_DISABLE_ADD_CALL ...
     public static final String EXTRA_DISABLE_ADD_CALL = "android.telecom.extra.DISABLE_ADD_CALL";
 
+    public static final String ACTION_CALL_IN_PROGRESS = "ACTION_CALL_IN_PROGRESS";
+    public static final String ACTION_TOGGLE_AUDIOROUTE = "ACTION_TOGGLE_AUDIOROUTE";
+    public static final String KEY_UUID = "UUID";
+    public static final String AUDIO_ROUTE = "AUDIO_ROUTE";
     public static final int FOREGROUND_SERVICE_TYPE_MICROPHONE = 128;
+
 }

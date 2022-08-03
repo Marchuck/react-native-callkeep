@@ -17,40 +17,38 @@
 
 package io.wazo.callkeep;
 
-import android.annotation.TargetApi;
-import android.content.Context;
-import android.content.Intent;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.Handler;
-import androidx.annotation.Nullable;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import android.telecom.CallAudioState;
-import android.telecom.Connection;
-import android.telecom.DisconnectCause;
-import android.telecom.TelecomManager;
-import android.net.Uri;
-import android.util.Log;
-
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import java.util.HashMap;
-
 import static io.wazo.callkeep.Constants.ACTION_ANSWER_CALL;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
+import static io.wazo.callkeep.Constants.ACTION_DID_CHANGE_AUDIO_ROUTE;
 import static io.wazo.callkeep.Constants.ACTION_DTMF_TONE;
 import static io.wazo.callkeep.Constants.ACTION_END_CALL;
 import static io.wazo.callkeep.Constants.ACTION_HOLD_CALL;
 import static io.wazo.callkeep.Constants.ACTION_MUTE_CALL;
+import static io.wazo.callkeep.Constants.ACTION_ON_SILENCE_INCOMING_CALL;
+import static io.wazo.callkeep.Constants.ACTION_SHOW_INCOMING_CALL_UI;
 import static io.wazo.callkeep.Constants.ACTION_UNHOLD_CALL;
 import static io.wazo.callkeep.Constants.ACTION_UNMUTE_CALL;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
-import static io.wazo.callkeep.Constants.ACTION_SHOW_INCOMING_CALL_UI;
-import static io.wazo.callkeep.Constants.ACTION_ON_SILENCE_INCOMING_CALL;
-import static io.wazo.callkeep.Constants.ACTION_DID_CHANGE_AUDIO_ROUTE;
+
+import android.annotation.TargetApi;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.telecom.CallAudioState;
+import android.telecom.Connection;
+import android.telecom.DisconnectCause;
+import android.telecom.TelecomManager;
+import android.util.Log;
+
+import androidx.annotation.Nullable;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+
+import java.util.HashMap;
 
 @TargetApi(Build.VERSION_CODES.M)
 public class VoiceConnection extends Connection {
@@ -58,7 +56,7 @@ public class VoiceConnection extends Connection {
     private boolean answered = false;
     private boolean rejected = false;
     private HashMap<String, String> handle;
-    private Context context;
+    private final Context context;
     private static final String TAG = "RNCallKeep";
 
     VoiceConnection(Context context, HashMap<String, String> handle) {
@@ -80,7 +78,7 @@ public class VoiceConnection extends Connection {
     @Override
     public void onExtrasChanged(Bundle extras) {
         super.onExtrasChanged(extras);
-        HashMap attributeMap = (HashMap<String, String>)extras.getSerializable("attributeMap");
+        HashMap<String, String> attributeMap = (HashMap<String, String>) extras.getSerializable("attributeMap");
         if (attributeMap != null) {
             handle = attributeMap;
         }
@@ -136,7 +134,7 @@ public class VoiceConnection extends Connection {
         Log.d(TAG, "[VoiceConnection] onDisconnect executed");
         try {
             ((VoiceConnectionService) context).deinitConnection(handle.get(EXTRA_CALL_UUID));
-        } catch(Throwable exception) {
+        } catch (Throwable exception) {
             Log.e(TAG, "[VoiceConnection] onDisconnect handle map error", exception);
         }
         destroy();
@@ -164,7 +162,7 @@ public class VoiceConnection extends Connection {
             default:
                 break;
         }
-        ((VoiceConnectionService)context).deinitConnection(handle.get(EXTRA_CALL_UUID));
+        ((VoiceConnectionService) context).deinitConnection(handle.get(EXTRA_CALL_UUID));
         destroy();
     }
 
@@ -176,7 +174,7 @@ public class VoiceConnection extends Connection {
         Log.d(TAG, "[VoiceConnection] onAbort executed");
         try {
             ((VoiceConnectionService) context).deinitConnection(handle.get(EXTRA_CALL_UUID));
-        } catch(Throwable exception) {
+        } catch (Throwable exception) {
             Log.e(TAG, "[VoiceConnection] onAbort handle map error", exception);
         }
         destroy();
@@ -320,7 +318,7 @@ public class VoiceConnection extends Connection {
         Log.d(TAG, "[VoiceConnection] onReject executed");
         try {
             ((VoiceConnectionService) context).deinitConnection(handle.get(EXTRA_CALL_UUID));
-        } catch(Throwable exception) {
+        } catch (Throwable exception) {
             Log.e(TAG, "[VoiceConnection] onReject, handle map error", exception);
         }
         destroy();
