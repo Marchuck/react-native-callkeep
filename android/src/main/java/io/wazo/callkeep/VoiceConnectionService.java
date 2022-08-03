@@ -27,13 +27,16 @@ import static io.wazo.callkeep.Constants.ACTION_END_CALL;
 import static io.wazo.callkeep.Constants.ACTION_ONGOING_CALL;
 import static io.wazo.callkeep.Constants.ACTION_ON_CREATE_CONNECTION_FAILED;
 import static io.wazo.callkeep.Constants.ACTION_TOGGLE_AUDIOROUTE;
-import static io.wazo.callkeep.Constants.AUDIO_ROUTE;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER_SCHEMA;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
 import static io.wazo.callkeep.Constants.EXTRA_DISABLE_ADD_CALL;
 import static io.wazo.callkeep.Constants.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE;
+import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE_CHANGER_NOTIFICATION;
+import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
+import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
 import static io.wazo.callkeep.Constants.KEY_UUID;
 
 import android.annotation.TargetApi;
@@ -207,7 +210,7 @@ public class VoiceConnectionService extends ConnectionService {
         incomingCallConnection.setRinging();
         incomingCallConnection.setInitialized();
 
-        startForegroundService();
+        startForegroundService(String.valueOf(number), callUUID, name);
 
         if (timeout != null) {
             this.checkForAppReachability(callUUID, timeout);
@@ -236,11 +239,10 @@ public class VoiceConnectionService extends ConnectionService {
 
     private Connection makeOutgoingCall(ConnectionRequest request, String uuid, Boolean forceWakeUp) {
         Bundle extras = request.getExtras();
-        Connection outgoingCallConnection = null;
         String number = request.getAddress().getSchemeSpecificPart();
         String extrasNumber = extras.getString(EXTRA_CALL_NUMBER);
         String displayName = extras.getString(EXTRA_CALLER_NAME);
-        Boolean isForeground = VoiceConnectionService.isRunning(this.getApplicationContext());
+        boolean isForeground = VoiceConnectionService.isRunning(this.getApplicationContext());
 
         Log.d(TAG, "[VoiceConnectionService] makeOutgoingCall, uuid:" + uuid + ", number: " + number + ", displayName:" + displayName);
 
@@ -265,12 +267,12 @@ public class VoiceConnectionService extends ConnectionService {
             extras.putBoolean(EXTRA_DISABLE_ADD_CALL, true);
         }
 
-        outgoingCallConnection = createConnection(request);
+        Connection outgoingCallConnection = createConnection(request);
         outgoingCallConnection.setDialing();
         outgoingCallConnection.setAudioModeIsVoip(true);
         outgoingCallConnection.setCallerDisplayName(displayName, TelecomManager.PRESENTATION_ALLOWED);
 
-        startForegroundService();
+        startForegroundService(number, uuid, displayName);
 
         // ‍️Weirdly on some Samsung phones (A50, S9...) using `setInitialized` will not display the native UI ...
         // when making a call from the native Phone application. The call will still be displayed correctly without it.
@@ -290,7 +292,7 @@ public class VoiceConnectionService extends ConnectionService {
     }
 
 
-    private void startForegroundService() {
+    private void startForegroundService(String number, String uuid, String callerName) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Foreground services not required before SDK 28
             return;
@@ -304,7 +306,11 @@ public class VoiceConnectionService extends ConnectionService {
         }
 
         if (foregroundSettings.hasKey("callingActivityClass")) {
-            onCallInProgress(new Bundle());
+            Bundle bundle = new Bundle();
+            bundle.putString(KEY_UUID, uuid);
+            bundle.putString(KEY_CALLER_NAME, callerName);
+            bundle.putString(KEY_CALL_HANDLE, number);
+            onCallInProgress(bundle);
             return;
         }
 
@@ -612,7 +618,7 @@ public class VoiceConnectionService extends ConnectionService {
         String action = intent.getAction();
         switch (action) {
             case ACTION_TOGGLE_AUDIOROUTE:
-                int targetAudioRoute = serviceExtras.getInt(AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
+                int targetAudioRoute = serviceExtras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
                 if (uuid != null) {
                     RNCallKeepModule.setCallAudioState(uuid, targetAudioRoute);
                 }
@@ -662,8 +668,7 @@ public class VoiceConnectionService extends ConnectionService {
 
     public static PendingIntentFactory toggleAudioRoutePendingIntent() {
         return (context, extras) -> {
-            String uuid = extras.getString(KEY_UUID, null);
-            int route = extras.getInt(AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
+            int route = extras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
             final int targetRoute;
             final int requestCode;
             if (route == CallAudioState.ROUTE_EARPIECE) {
@@ -673,7 +678,7 @@ public class VoiceConnectionService extends ConnectionService {
                 targetRoute = CallAudioState.ROUTE_EARPIECE;
                 requestCode = RequestCodes.ROUTE_EARPIECE.requestCode;
             }
-            Intent intent = toggleAudioRouteIntent(context, uuid, targetRoute);
+            Intent intent = toggleAudioRouteIntent(context, extras, targetRoute, KEY_AUDIO_ROUTE_CHANGER_NOTIFICATION);
             return getForegroundServiceCompat(context, requestCode, intent);
         };
     }

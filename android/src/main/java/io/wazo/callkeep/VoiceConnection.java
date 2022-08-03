@@ -75,6 +75,16 @@ public class VoiceConnection extends Connection {
         }
     }
 
+    @Nullable
+    public String getCallNumber() {
+        return handle.get(EXTRA_CALL_NUMBER);
+    }
+
+    @Nullable
+    public String getCallerName() {
+        return handle.get(EXTRA_CALLER_NAME);
+    }
+
     @Override
     public void onExtrasChanged(Bundle extras) {
         super.onExtrasChanged(extras);

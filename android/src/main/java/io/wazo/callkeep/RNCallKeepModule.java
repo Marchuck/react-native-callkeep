@@ -17,6 +17,7 @@
 
 package io.wazo.callkeep;
 
+import static io.wazo.callkeep.CallStatusHelper.toggleAudioRouteIntent;
 import static io.wazo.callkeep.Constants.ACTION_ANSWER_CALL;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
 import static io.wazo.callkeep.Constants.ACTION_CHECK_REACHABILITY;
@@ -35,6 +36,10 @@ import static io.wazo.callkeep.Constants.ACTION_WAKE_APP;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
+import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE_CHANGER_APP;
+import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
+import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
+import static io.wazo.callkeep.Constants.KEY_UUID;
 
 import android.Manifest;
 import android.app.Activity;
@@ -370,6 +375,10 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void endCall(String uuid) {
+        Context appContext = getAppContext();
+        if (uuid != null && appContext != null) {
+            finishCallActivityIfPossible(appContext);
+        }
         endCallNative(uuid);
     }
 
@@ -562,13 +571,45 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
         if (!isConnectionServiceAvailable() || !hasPhoneAccount()) {
             return;
         }
-
+        if (uuid == null) {
+            Log.w(TAG, "[RNCallKeepModule] reportEndCallWithUUID ignored because uuid == null");
+            return;
+        }
+        //region dismiss notification + finish call activity
+        Context context = getAppContext();
+        if (context != null) {
+            Intent intent = CallStatusHelper.endCall(getAppContext(), uuid);
+            context.startService(intent);
+            finishCallActivityIfPossible(context);
+        }
+        //endregion
         VoiceConnection conn = (VoiceConnection) VoiceConnectionService.getConnection(uuid);
         if (conn == null) {
             Log.w(TAG, "[RNCallKeepModule] reportEndCallWithUUID ignored because no connection found, uuid: " + uuid);
+        } else {
+            conn.reportDisconnect(reason);
+        }
+    }
+
+    private void finishCallActivityIfPossible(@NonNull Context context) {
+        ReadableMap settings = VoiceConnectionService.getForegroundSettings(context);
+        if (settings == null || !settings.hasKey("callingActivityClass")) {
+            Log.w(TAG, "[RNCallKeepModule] failed to fetch callingActivityClass");
             return;
         }
-        conn.reportDisconnect(reason);
+        if (!settings.hasKey("shouldCloseScreenOnDisconnect")) return;
+        boolean shouldCloseScreenOnDisconnect = settings.getBoolean("shouldCloseScreenOnDisconnect");
+        if (!shouldCloseScreenOnDisconnect) return;
+        String activityKlazz = settings.getString("callingActivityClass");
+        Activity currentActivity = reactContext.getCurrentActivity();
+        if (currentActivity == null || activityKlazz == null) {
+            return;
+        }
+        String simpleActivityName = currentActivity.getClass().getSimpleName();
+        String[] parts = activityKlazz.split("\\.");
+        if (simpleActivityName.endsWith(parts[parts.length - 1])) {
+            currentActivity.finish();
+        }
     }
 
     @ReactMethod
@@ -641,6 +682,8 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
             state = CallAudioState.ROUTE_EARPIECE;
         }
         setCallAudioState(uuid, state);
+
+        notifyCallStatusService(uuid, state, conn);
     }
 
     public static void setCallAudioState(String uuid, int callAudioState) {
@@ -680,15 +723,33 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
             if (audioRoute.equals("Speaker")) {
                 Log.d(TAG, "[RNCallKeepModule] setting audio route: Speaker");
                 conn.setAudioRoute(CallAudioState.ROUTE_SPEAKER);
+                notifyCallStatusService(uuid, CallAudioState.ROUTE_SPEAKER, conn);
                 promise.resolve(true);
                 return;
             }
             Log.d(TAG, "[RNCallKeepModule] setting audio route: Wired/Earpiece");
             conn.setAudioRoute(CallAudioState.ROUTE_WIRED_OR_EARPIECE);
+            notifyCallStatusService(uuid, CallAudioState.ROUTE_EARPIECE, conn);
             promise.resolve(true);
         } catch (Exception e) {
             promise.reject("SetAudioRoute", e.getMessage());
         }
+    }
+
+    private void notifyCallStatusService(String uuid, int state, VoiceConnection conn) {
+        Context context = getAppContext();
+        if (context == null) return;
+        Bundle extras = new Bundle();
+        extras.putString(KEY_UUID, uuid);
+        extras.putString(KEY_CALL_HANDLE, conn.getCallNumber());
+        extras.putString(KEY_CALLER_NAME, conn.getCallerName());
+        Intent changeAudioRouteIntent = toggleAudioRouteIntent(
+                context,
+                extras,
+                state,
+                KEY_AUDIO_ROUTE_CHANGER_APP
+        );
+        ContextCompat.startForegroundService(context, changeAudioRouteIntent);
     }
 
     @ReactMethod
@@ -1047,6 +1108,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
         }
     }
 
+    @Nullable
     private Context getAppContext() {
         return this.reactContext != null ? this.reactContext.getApplicationContext() : null;
     }
@@ -1101,12 +1163,13 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
             Log.d(TAG, "[RNCallKeepModule][onReceive] :" + intent.getAction());
 
             String uuid = attributeMap.get(EXTRA_CALL_UUID);
+            String callHandle = attributeMap.get(EXTRA_CALL_NUMBER);
+            String callerName = attributeMap.get(EXTRA_CALLER_NAME);
 
             switch (intent.getAction()) {
                 case ACTION_END_CALL:
                     args.putString("callUUID", uuid);
                     context.startService(CallStatusHelper.endCall(context, uuid));
-
                     sendEventToJS("RNCallKeepPerformEndCallAction", args);
                     break;
                 case ACTION_ANSWER_CALL:
@@ -1140,11 +1203,17 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                     sendEventToJS("RNCallKeepDidPerformDTMFAction", args);
                     break;
                 case ACTION_ONGOING_CALL:
-                    args.putString("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
-                    args.putString("name", attributeMap.get(EXTRA_CALLER_NAME));
+                    args.putString("name", callerName);
 
-                    Intent startOngoingCallIntent = CallStatusHelper.callStartedIntent(context, uuid);
+                    Intent startOngoingCallIntent = CallStatusHelper.callStartedIntent(
+                            context,
+                            uuid,
+                            true,
+                            callHandle,
+                            callerName
+                    );
                     ContextCompat.startForegroundService(context, startOngoingCallIntent);
 
                     sendEventToJS("RNCallKeepDidReceiveStartCallAction", args);
@@ -1156,11 +1225,17 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                     sendEventToJS("RNCallKeepCheckReachability", null);
                     break;
                 case ACTION_SHOW_INCOMING_CALL_UI:
-                    args.putString("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
-                    args.putString("name", attributeMap.get(EXTRA_CALLER_NAME));
+                    args.putString("name", callerName);
 
-                    Intent incomingCallUiIntent = CallStatusHelper.callStartedIntent(context, uuid);
+                    Intent incomingCallUiIntent = CallStatusHelper.callStartedIntent(
+                            context,
+                            uuid,
+                            false,
+                            callHandle,
+                            callerName
+                    );
                     ContextCompat.startForegroundService(context, incomingCallUiIntent);
 
                     sendEventToJS("RNCallKeepShowIncomingCallUi", args);
@@ -1169,7 +1244,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                     Intent headlessIntent = new Intent(reactContext, RNCallKeepBackgroundMessagingService.class);
                     headlessIntent.putExtra("callUUID", uuid);
                     headlessIntent.putExtra("name", attributeMap.get(EXTRA_CALLER_NAME));
-                    headlessIntent.putExtra("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    headlessIntent.putExtra("handle", callHandle);
                     Log.d(TAG, "[RNCallKeepModule] wakeUpApplication: " + uuid + ", number : " + attributeMap.get(EXTRA_CALL_NUMBER) + ", displayName:" + attributeMap.get(EXTRA_CALLER_NAME));
 
                     ComponentName name = reactContext.startService(headlessIntent);
@@ -1178,20 +1253,24 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                     }
                     break;
                 case ACTION_ON_SILENCE_INCOMING_CALL:
-                    args.putString("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
-                    args.putString("name", attributeMap.get(EXTRA_CALLER_NAME));
+                    args.putString("name", callerName);
                     sendEventToJS("RNCallKeepOnSilenceIncomingCall", args);
                     break;
                 case ACTION_ON_CREATE_CONNECTION_FAILED:
-                    args.putString("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
-                    args.putString("name", attributeMap.get(EXTRA_CALLER_NAME));
+                    args.putString("name", callerName);
+                    context.startService(CallStatusHelper.endCall(context, uuid));
                     sendEventToJS("RNCallKeepOnIncomingConnectionFailed", args);
                 case ACTION_DID_CHANGE_AUDIO_ROUTE:
-                    args.putString("handle", attributeMap.get(EXTRA_CALL_NUMBER));
+                    String audioRoute = attributeMap.get("output");
+                    args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
-                    args.putString("output", attributeMap.get("output"));
+                    args.putString("output", audioRoute);
+                    Log.w(TAG, "didChangeAudioRoute: " + audioRoute);
+
                     sendEventToJS("RNCallKeepDidChangeAudioRoute", args);
                     break;
             }

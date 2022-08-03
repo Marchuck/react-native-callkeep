@@ -1,18 +1,25 @@
 package io.wazo.callkeep;
 
 
-import static io.wazo.callkeep.Constants.AUDIO_ROUTE;
+import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE;
+import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
+import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
 
 import android.app.Notification;
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.Bundle;
 import android.telecom.CallAudioState;
+import android.text.TextUtils;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
 import com.facebook.react.bridge.ReadableMap;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
 
 public class NotificationHelper {
 
@@ -24,6 +31,7 @@ public class NotificationHelper {
         this.context = context;
     }
 
+    @DrawableRes
     private int provideSmallIcon() {
         ReadableMap settings = VoiceConnectionService.getForegroundSettings(context);
         if (settings == null || !settings.hasKey("notificationIcon")) {
@@ -60,7 +68,7 @@ public class NotificationHelper {
         builder.setContentText(getDisplayName(serviceExtras));
         builder.addAction(new NotificationCompat.Action(NO_ICON, "End call", endCall.asPendingIntent(context, serviceExtras)));
 
-        int audioRoute = serviceExtras.getInt(AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
+        int audioRoute = serviceExtras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
         final String label;
         if (audioRoute == CallAudioState.ROUTE_EARPIECE) {
             label = "Speaker on";
@@ -75,8 +83,21 @@ public class NotificationHelper {
     }
 
     private String getDisplayName(Bundle serviceExtras) {
-        // todo: pass through user metadata
-        return "User";
+        String callerName = serviceExtras.getString(KEY_CALLER_NAME, null);
+        if (TextUtils.isEmpty(callerName)) {
+            callerName = serviceExtras.getString(KEY_CALL_HANDLE, null);
+        }
+        if (TextUtils.isEmpty(callerName)) {
+            return "Tap to open app";
+        }
+        final String name;
+        try {
+            // JS issue with Strings: (e.g. transforms '%20's to spaces)
+            return URLDecoder.decode(callerName, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            return callerName;
+        }
+        return name;
     }
 
     //region CUSTOM EXCEPTIONS
