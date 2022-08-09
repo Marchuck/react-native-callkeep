@@ -17,7 +17,6 @@
 
 package io.wazo.callkeep;
 
-import static io.wazo.callkeep.CallStatusHelper.endCall;
 import static io.wazo.callkeep.CallStatusHelper.getForegroundServiceCompat;
 import static io.wazo.callkeep.CallStatusHelper.toggleAudioRouteIntent;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
@@ -587,15 +586,13 @@ public class VoiceConnectionService extends ConnectionService {
     }
 
     private void checkForAppReachability(final String callUUID, final Integer timeout) {
-        final VoiceConnectionService instance = this;
-
         new android.os.Handler().postDelayed(new Runnable() {
             public void run() {
-                if (instance.isReachable) {
+                if (isReachable) {
                     return;
                 }
                 Connection conn = VoiceConnectionService.getConnection(callUUID);
-                Log.w(TAG, "[VoiceConnectionService] checkForAppReachability timeout after " + timeout + " ms, isReachable:" + instance.isReachable + ", uuid: " + callUUID);
+                Log.w(TAG, "[VoiceConnectionService] checkForAppReachability timeout after " + timeout + " ms, isReachable:" + isReachable + ", uuid: " + callUUID);
 
                 if (conn == null) {
                     Log.w(TAG, "[VoiceConnectionService] checkForAppReachability timeout, no connection to close with uuid: " + callUUID);
@@ -750,7 +747,7 @@ public class VoiceConnectionService extends ConnectionService {
 
     public static PendingIntentFactory endCallPendingIntent() {
         return (context, bundle) -> {
-            Intent intent = endCall(context, bundle.getString(KEY_UUID));
+            Intent intent = CallStatusHelper.performEndCall(context, bundle.getString(KEY_UUID));
             int req = RequestCodes.END_CALL.requestCode;
             // we're attempt to stop foreground service(without notification),
             // so there's not point to do it - we want to dismiss ongoing notification

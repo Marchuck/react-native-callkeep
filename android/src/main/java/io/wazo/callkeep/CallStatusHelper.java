@@ -16,6 +16,7 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 public class CallStatusHelper {
@@ -24,7 +25,19 @@ public class CallStatusHelper {
     public static final String TAG = "CallStatusService";
 
     //region INTERACTION INTENTS
-    public static Intent endCall(Context context, String uuid) {
+
+    /**
+     * unlike performEndCall(context,uuid)
+     * this won't trigger endCallNative on VoiceConnectionService, but simply dismiss connection
+     *
+     * @param context
+     * @return
+     */
+    public static Intent endCall(@NonNull Context context) {
+        return performEndCall(context, null);
+    }
+
+    public static Intent performEndCall(@NonNull Context context, @Nullable String uuid) {
         Intent intent = new Intent(context, KLAZZ);
         intent.setAction(ACTION_END_CALL);
         intent.putExtra(KEY_UUID, uuid);

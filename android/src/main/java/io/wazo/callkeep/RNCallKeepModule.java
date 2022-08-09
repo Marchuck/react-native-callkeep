@@ -375,10 +375,6 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void endCall(String uuid) {
-        Context appContext = getAppContext();
-        if (uuid != null && appContext != null) {
-            finishCallActivityIfPossible(appContext);
-        }
         endCallNative(uuid);
     }
 
@@ -578,7 +574,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
         //region dismiss notification + finish call activity
         Context context = getAppContext();
         if (context != null) {
-            Intent intent = CallStatusHelper.endCall(getAppContext(), uuid);
+            Intent intent = CallStatusHelper.endCall(getAppContext());
             context.startService(intent);
             finishCallActivityIfPossible(context);
         }
@@ -758,7 +754,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
             Context context = this.getAppContext();
             if (context == null) {
                 Log.w(TAG, "[RNCallKeepModule][getAudioRoutes] no react context found.");
-                promise.reject("No react context found to list audio routes");
+                promise.reject(new NullPointerException("No react context found to list audio routes"));
                 return;
             }
             AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
@@ -1169,7 +1165,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
             switch (intent.getAction()) {
                 case ACTION_END_CALL:
                     args.putString("callUUID", uuid);
-                    context.startService(CallStatusHelper.endCall(context, uuid));
+                    context.startService(CallStatusHelper.endCall(context));
                     sendEventToJS("RNCallKeepPerformEndCallAction", args);
                     break;
                 case ACTION_ANSWER_CALL:
@@ -1262,7 +1258,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                     args.putString("handle", callHandle);
                     args.putString("callUUID", uuid);
                     args.putString("name", callerName);
-                    context.startService(CallStatusHelper.endCall(context, uuid));
+                    context.startService(CallStatusHelper.endCall(context));
                     sendEventToJS("RNCallKeepOnIncomingConnectionFailed", args);
                 case ACTION_DID_CHANGE_AUDIO_ROUTE:
                     String audioRoute = attributeMap.get("output");
