@@ -3,11 +3,12 @@ package io.wazo.callkeep;
 import static io.wazo.callkeep.Constants.ACTION_CALL_IN_PROGRESS;
 import static io.wazo.callkeep.Constants.ACTION_END_CALL;
 import static io.wazo.callkeep.Constants.ACTION_TOGGLE_AUDIOROUTE;
+import static io.wazo.callkeep.Constants.ACTION_TOGGLE_MUTE;
 import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE;
-import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE_CHANGER;
 import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
 import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
 import static io.wazo.callkeep.Constants.KEY_IS_ONGOING;
+import static io.wazo.callkeep.Constants.KEY_MUTE;
 import static io.wazo.callkeep.Constants.KEY_UUID;
 
 import android.app.PendingIntent;
@@ -60,16 +61,52 @@ public class CallStatusHelper {
         return intent;
     }
 
-    public static Intent toggleAudioRouteIntent(Context context, @Nullable Bundle originalExtras, int targetAudioRoute, String changer) {
+    public static Intent toggleAudioRouteIntent(
+            Context context,
+            @Nullable Bundle originalExtras
+    ) {
         Intent intent = new Intent(context, KLAZZ);
         intent.setAction(ACTION_TOGGLE_AUDIOROUTE);
         if (originalExtras != null && !originalExtras.keySet().isEmpty()) {
             intent.putExtras(originalExtras);
         }
-        intent.putExtra(KEY_AUDIO_ROUTE, targetAudioRoute);
-        intent.putExtra(KEY_AUDIO_ROUTE_CHANGER, changer);
         return intent;
     }
+
+    public static Intent updateCallInProgressIntent(
+            Context context,
+            @Nullable Bundle originalExtras,
+            int targetAudioRoute,
+            boolean muted
+    ) {
+        Intent intent = new Intent(context, KLAZZ);
+        intent.setAction(ACTION_CALL_IN_PROGRESS);
+        if (originalExtras != null && !originalExtras.keySet().isEmpty()) {
+            intent.putExtras(originalExtras);
+        }
+        intent.putExtra(KEY_AUDIO_ROUTE, targetAudioRoute);
+        intent.putExtra(KEY_MUTE, muted);
+        return intent;
+    }
+
+    @Deprecated
+    // currently not supported (disabled)
+    public static Intent toggleMuteIntent(
+            Context context,
+            @Nullable Bundle originalExtras,
+            int targetAudioRoute,
+            boolean muted
+    ) {
+        Intent intent = new Intent(context, KLAZZ);
+        intent.setAction(ACTION_TOGGLE_MUTE);
+        if (originalExtras != null && !originalExtras.keySet().isEmpty()) {
+            intent.putExtras(originalExtras);
+        }
+        intent.putExtra(KEY_AUDIO_ROUTE, targetAudioRoute);
+        intent.putExtra(KEY_MUTE, muted);
+        return intent;
+    }
+
     //endregion
 
     public static PendingIntent getForegroundServiceCompat(

@@ -19,6 +19,7 @@ package io.wazo.callkeep;
 
 import static io.wazo.callkeep.CallStatusHelper.getForegroundServiceCompat;
 import static io.wazo.callkeep.CallStatusHelper.toggleAudioRouteIntent;
+import static io.wazo.callkeep.CallStatusHelper.toggleMuteIntent;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
 import static io.wazo.callkeep.Constants.ACTION_CALL_IN_PROGRESS;
 import static io.wazo.callkeep.Constants.ACTION_CHECK_REACHABILITY;
@@ -26,6 +27,7 @@ import static io.wazo.callkeep.Constants.ACTION_END_CALL;
 import static io.wazo.callkeep.Constants.ACTION_ONGOING_CALL;
 import static io.wazo.callkeep.Constants.ACTION_ON_CREATE_CONNECTION_FAILED;
 import static io.wazo.callkeep.Constants.ACTION_TOGGLE_AUDIOROUTE;
+import static io.wazo.callkeep.Constants.ACTION_TOGGLE_MUTE;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER_SCHEMA;
@@ -33,9 +35,9 @@ import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
 import static io.wazo.callkeep.Constants.EXTRA_DISABLE_ADD_CALL;
 import static io.wazo.callkeep.Constants.FOREGROUND_SERVICE_TYPE_MICROPHONE;
 import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE;
-import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE_CHANGER_NOTIFICATION;
 import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
 import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
+import static io.wazo.callkeep.Constants.KEY_MUTE;
 import static io.wazo.callkeep.Constants.KEY_UUID;
 
 import android.annotation.TargetApi;
@@ -64,6 +66,7 @@ import android.telecom.PhoneAccountHandle;
 import android.telecom.TelecomManager;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -93,13 +96,24 @@ public class VoiceConnectionService extends ConnectionService {
     private static final String TAG = "RNCallKeep";
 
     // Delay events sent to RNCallKeepModule when there is no listener available
-    private static List<Bundle> delayedEvents = new ArrayList<Bundle>();
+    private static List<Bundle> delayedEvents = new ArrayList<>();
 
     public static Map<String, VoiceConnection> currentConnections = new HashMap<>();
     public static Boolean hasOutgoingCall = false;
     public static VoiceConnectionService currentConnectionService = null;
 
-    public static Connection getConnection(String connectionId) {
+    public static boolean hasActiveConnection() {
+        for (String uuid : currentConnections.keySet()) {
+            VoiceConnection connection = currentConnections.get(uuid);
+            if (connection == null) continue;
+            return true;
+        }
+        return false;
+    }
+
+    @Nullable
+    public static VoiceConnection getConnection(String connectionId) {
+        if (connectionId == null) return null;
         if (currentConnections.containsKey(connectionId)) {
             return currentConnections.get(connectionId);
         }
@@ -205,9 +219,9 @@ public class VoiceConnectionService extends ConnectionService {
         Log.d(TAG, "[VoiceConnectionService] onCreateIncomingConnection, name:" + name + ", number" + number +
                 ", isForeground: " + isForeground + ", isReachable:" + isReachable + ", timeout: " + timeout);
 
-        Connection incomingCallConnection = createConnection(request);
-        incomingCallConnection.setRinging();
-        incomingCallConnection.setInitialized();
+        VoiceConnection connection = createConnection(request);
+        connection.setRinging();
+        connection.setInitialized();
 
         startForegroundService(String.valueOf(number), callUUID, name);
 
@@ -215,7 +229,7 @@ public class VoiceConnectionService extends ConnectionService {
             this.checkForAppReachability(callUUID, timeout);
         }
 
-        return incomingCallConnection;
+        return connection;
     }
 
     //endregion
@@ -341,7 +355,6 @@ public class VoiceConnectionService extends ConnectionService {
         startForeground(FOREGROUND_SERVICE_TYPE_MICROPHONE, notification);
     }
 
-
     private void stopForegroundService() {
         Log.d(TAG, "[VoiceConnectionService] stopForegroundService");
         ReadableMap foregroundSettings = getForegroundSettings(null);
@@ -405,7 +418,7 @@ public class VoiceConnectionService extends ConnectionService {
         return isAvailable;
     }
 
-    private Connection createConnection(ConnectionRequest request) {
+    private VoiceConnection createConnection(ConnectionRequest request) {
         Bundle extras = request.getExtras();
         if (request.getAddress() == null) {
             return null;
@@ -444,14 +457,16 @@ public class VoiceConnectionService extends ConnectionService {
             }
         }
 
+        String uuid = extras.getString(EXTRA_CALL_UUID);
         connection.setInitializing();
         connection.setExtras(extras);
-        currentConnections.put(extras.getString(EXTRA_CALL_UUID), connection);
+        connection.setUuid(uuid);
+        currentConnections.put(uuid, connection);
 
         // Get other connections for conferencing
         Map<String, VoiceConnection> otherConnections = new HashMap<>();
         for (Map.Entry<String, VoiceConnection> entry : currentConnections.entrySet()) {
-            if (!(extras.getString(EXTRA_CALL_UUID).equals(entry.getKey()))) {
+            if (!(uuid.equals(entry.getKey()))) {
                 otherConnections.put(entry.getKey(), entry.getValue());
             }
         }
@@ -610,27 +625,72 @@ public class VoiceConnectionService extends ConnectionService {
             return START_NOT_STICKY;
         }
         final Bundle serviceExtras = intent.getExtras();
-        Log.i(TAG, "action: " + intent.getAction() + ", extras: " + serviceExtras);
+        Log.w(TAG, "action: " + intent.getAction() + ", extras: " + serviceExtras);
         String uuid = serviceExtras.getString(KEY_UUID, null);
         String action = intent.getAction();
+        VoiceConnection conn = getConnection(uuid);
+
         switch (action) {
-            case ACTION_TOGGLE_AUDIOROUTE:
-                int targetAudioRoute = serviceExtras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
-                if (uuid != null) {
-                    RNCallKeepModule.setCallAudioState(uuid, targetAudioRoute);
+            case ACTION_TOGGLE_MUTE:
+                if (uuid == null) break;
+                boolean isMuted = false;
+                if (conn != null) {
+                    isMuted = !conn.isMuted();
+                    RNCallKeepModule.setMutedCallNative(uuid, isMuted);
                 }
+                serviceExtras.putBoolean(KEY_MUTE, isMuted);
                 onCallInProgress(serviceExtras);
+                if (conn != null) {
+                    conn.setTickerEnabled(true);
+                }
                 return START_STICKY;
-            case ACTION_CALL_IN_PROGRESS:
+            case ACTION_TOGGLE_AUDIOROUTE:
+                if (uuid == null) break;
+                int audioRoute = CallAudioState.ROUTE_EARPIECE;
+                if (conn != null) {
+                    conn.setTickerEnabled(false);
+                    audioRoute = conn.getCallAudioRouteOrDefault();
+                    if (audioRoute == CallAudioState.ROUTE_EARPIECE) {
+                        audioRoute = CallAudioState.ROUTE_SPEAKER;
+                    } else {
+                        audioRoute = CallAudioState.ROUTE_EARPIECE;
+                    }
+                    conn.updateAudioRoute(audioRoute);
+                    RNCallKeepModule.setCallAudioState(uuid, audioRoute);
+                }
+                Log.w(TAG, "ACTION_TOGGLE_AUDIOROUTE: " + audioRoute);
+
+                serviceExtras.putInt(KEY_AUDIO_ROUTE, audioRoute);
                 onCallInProgress(serviceExtras);
+                if (conn != null) {
+                    conn.setTickerEnabled(true);
+                }
+                return START_NOT_STICKY;
+            case ACTION_CALL_IN_PROGRESS:
+                int route = CallAudioState.ROUTE_EARPIECE;
+                if (conn != null) {
+                    conn.setTickerEnabled(false);
+                    route = conn.getCallAudioRouteOrDefault();
+                }
+                Log.w(TAG, "ACTION_CALL_IN_PROGRESS: " + route);
+                serviceExtras.putInt(KEY_AUDIO_ROUTE, route);
+                onCallInProgress(serviceExtras);
+                if (conn != null) {
+                    conn.setTickerEnabled(true);
+                }
                 return START_STICKY;
             case ACTION_END_CALL:
+                if (conn != null) {
+                    conn.setTickerEnabled(false);
+                }
                 onCallEnded(uuid);
                 return START_NOT_STICKY;
             default:
                 Log.i(TAG, "onStartCommand: unknown action " + action);
                 return START_NOT_STICKY;
         }
+        return START_NOT_STICKY;
+
     }
 
     //region INTERACTION IMPLEMENTATION METHODS
@@ -651,31 +711,50 @@ public class VoiceConnectionService extends ConnectionService {
         return map.getString("channelId");
     }
 
-    private void onCallInProgress(Bundle serviceExtras) {
+    private void onCallInProgress(@NonNull Bundle serviceExtras) {
+        attemptFinishPendingIncomingCalls();
         String channelId = resolveChannelId();
-        Notification lastNotification = new NotificationHelper(this).getCallInProgressNotification(
+        Notification lastNotification = new NotificationHelper(this).getStyledCallInProgressNotification(
                 channelId,
                 serviceExtras,
                 onReturnToAppClicked(),
                 endCallPendingIntent(),
-                toggleAudioRoutePendingIntent()
+                toggleAudioRoutePendingIntent(),
+                toggleMutePendingIntent()
         );
         startForeground(FOREGROUND_SERVICE_TYPE_MICROPHONE, lastNotification);
+    }
+
+    private void attemptFinishPendingIncomingCalls() {
+        try {
+            Class<?> klazz = Class.forName("com.comms.ActiveCallIndicationService");
+            stopService(new Intent(getApplicationContext(), klazz));
+        } catch (ClassNotFoundException e) {
+            Log.e(TAG, "attemptFinishPendingIncomingCalls: ", e);
+            e.printStackTrace();
+        }
     }
 
     public static PendingIntentFactory toggleAudioRoutePendingIntent() {
         return (context, extras) -> {
             int route = extras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
-            final int targetRoute;
             final int requestCode;
             if (route == CallAudioState.ROUTE_EARPIECE) {
-                targetRoute = CallAudioState.ROUTE_SPEAKER;
                 requestCode = RequestCodes.ROUTE_SPEAKER.requestCode;
             } else {
-                targetRoute = CallAudioState.ROUTE_EARPIECE;
                 requestCode = RequestCodes.ROUTE_EARPIECE.requestCode;
             }
-            Intent intent = toggleAudioRouteIntent(context, extras, targetRoute, KEY_AUDIO_ROUTE_CHANGER_NOTIFICATION);
+            Intent intent = toggleAudioRouteIntent(context, extras);
+            return getForegroundServiceCompat(context, requestCode, intent);
+        };
+    }
+
+    public static PendingIntentFactory toggleMutePendingIntent() {
+        return (context, extras) -> {
+            int route = extras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
+            boolean muted = extras.getBoolean(KEY_MUTE, false);
+            final int requestCode = RequestCodes.MUTE_CALL.requestCode;
+            Intent intent = toggleMuteIntent(context, extras, route, !muted);
             return getForegroundServiceCompat(context, requestCode, intent);
         };
     }
@@ -755,5 +834,4 @@ public class VoiceConnectionService extends ConnectionService {
         };
     }
     //endregion
-
 }

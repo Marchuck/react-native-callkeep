@@ -17,6 +17,7 @@
 
 package io.wazo.callkeep;
 
+import static io.wazo.callkeep.CallStatusHelper.updateCallInProgressIntent;
 import static io.wazo.callkeep.Constants.ACTION_ANSWER_CALL;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
 import static io.wazo.callkeep.Constants.ACTION_DID_CHANGE_AUDIO_ROUTE;
@@ -31,6 +32,10 @@ import static io.wazo.callkeep.Constants.ACTION_UNMUTE_CALL;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
+import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
+import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
+import static io.wazo.callkeep.Constants.KEY_CALL_START_DATE;
+import static io.wazo.callkeep.Constants.KEY_UUID;
 
 import android.annotation.TargetApi;
 import android.content.Context;
@@ -39,25 +44,45 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.telecom.CallAudioState;
 import android.telecom.Connection;
 import android.telecom.DisconnectCause;
 import android.telecom.TelecomManager;
+import android.text.TextUtils;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
+import java.util.Date;
 import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @TargetApi(Build.VERSION_CODES.M)
 public class VoiceConnection extends Connection {
+
+    private static final int TICK_INTERVAL_MS = 1_000;
+
     private boolean isMuted = false;
     private boolean answered = false;
     private boolean rejected = false;
+    private volatile int callAudioRoute = CallAudioState.ROUTE_EARPIECE;
+    private String uuid;
     private HashMap<String, String> handle;
     private final Context context;
+    @Nullable
+    private volatile Date startedCallDate = null;
     private static final String TAG = "RNCallKeep";
+
+    private final TickerRunnable tickerRunnable = new TickerRunnable();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    public void setTickerEnabled(boolean enabled) {
+        Log.w(TAG, "setTickerEnabled(" + enabled + ")");
+        tickerRunnable.setEnabled(enabled);
+    }
 
     VoiceConnection(Context context, HashMap<String, String> handle) {
         super();
@@ -70,9 +95,34 @@ public class VoiceConnection extends Connection {
         if (number != null) {
             setAddress(Uri.parse(number), TelecomManager.PRESENTATION_ALLOWED);
         }
-        if (name != null && !name.equals("")) {
+        if (!TextUtils.isEmpty(name)) {
             setCallerDisplayName(name, TelecomManager.PRESENTATION_ALLOWED);
         }
+    }
+
+    private void notifyServiceAboutTick() {
+        if (context == null || uuid == null) {
+            Log.w(TAG, "sendCallRequestToService( " + context + ", " + uuid + ")");
+            return;
+        }
+        Bundle extras = new Bundle();
+        extras.putString(KEY_UUID, uuid);
+        extras.putString(KEY_CALL_HANDLE, getCallNumber());
+        extras.putString(KEY_CALLER_NAME, getCallerName());
+        Date date = getStartedCallDate();
+        if (date != null) {
+            extras.putSerializable(KEY_CALL_START_DATE, date);
+        }
+        boolean isMuted = isMuted();
+
+        Log.w(TAG, "notifyServiceAboutTick(" + audioRouteReadable(callAudioRoute) + ", " + isMuted + ")");
+        final Intent intent = updateCallInProgressIntent(
+                context,
+                extras,
+                callAudioRoute,
+                isMuted
+        );
+        ContextCompat.startForegroundService(context, intent);
     }
 
     @Nullable
@@ -150,6 +200,26 @@ public class VoiceConnection extends Connection {
         destroy();
     }
 
+    public boolean isMuted() {
+        return isMuted;
+    }
+
+    public boolean isAnswered() {
+        return answered;
+    }
+
+    public boolean isRejected() {
+        return rejected;
+    }
+
+    public Date getStartedCallDate() {
+        return startedCallDate;
+    }
+
+    public synchronized int getCallAudioRouteOrDefault() {
+        return callAudioRoute;
+    }
+
     public void reportDisconnect(int reason) {
         super.onDisconnect();
         switch (reason) {
@@ -173,6 +243,8 @@ public class VoiceConnection extends Connection {
                 break;
         }
         ((VoiceConnectionService) context).deinitConnection(handle.get(EXTRA_CALL_UUID));
+        tickerRunnable.isActive.set(false);
+        handler.removeCallbacks(tickerRunnable);
         destroy();
     }
 
@@ -311,9 +383,12 @@ public class VoiceConnection extends Connection {
         setConnectionCapabilities(getConnectionCapabilities() | Connection.CAPABILITY_HOLD);
         setAudioModeIsVoip(true);
 
+        startedCallDate = new Date();
+        tickerRunnable.isActive.set(true);
         sendCallRequestToActivity(ACTION_ANSWER_CALL, handle);
         sendCallRequestToActivity(ACTION_AUDIO_SESSION, handle);
         Log.d(TAG, "[VoiceConnection] onAnswer executed");
+        handler.postDelayed(tickerRunnable, TICK_INTERVAL_MS);
     }
 
     private void _onReject(int rejectReason, String replyMessage) {
@@ -344,7 +419,6 @@ public class VoiceConnection extends Connection {
      * Send call request to the RNCallKeepModule
      */
     private void sendCallRequestToActivity(final String action, @Nullable final HashMap attributeMap) {
-        final VoiceConnection instance = this;
         final Handler handler = new Handler();
 
         handler.post(new Runnable() {
@@ -356,8 +430,58 @@ public class VoiceConnection extends Connection {
                     extras.putSerializable("attributeMap", attributeMap);
                     intent.putExtras(extras);
                 }
+                Log.w(TAG, "run: sending broadcast " + action);
                 LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
             }
         });
+    }
+
+    public void setUuid(String uuid) {
+        this.uuid = uuid;
+    }
+
+    public void updateAudioRoute(int audioRoute) {
+        this.callAudioRoute = audioRoute;
+        Log.w(TAG, "updateAudioRoute: " + audioRouteReadable(audioRoute));
+    }
+
+    private static String audioRouteReadable(int callAudioRoute) {
+        if (callAudioRoute == CallAudioState.ROUTE_EARPIECE) {
+            return "ROUTE_EARPIECE";
+        } else if (callAudioRoute == CallAudioState.ROUTE_SPEAKER) {
+            return "ROUTE_SPEAKER";
+        } else return "unsupported route " + callAudioRoute;
+    }
+
+    public void updateIsMuted(boolean muted) {
+        this.isMuted = muted;
+    }
+
+    private class TickerRunnable implements Runnable {
+
+        private final AtomicBoolean isActive = new AtomicBoolean(false);
+
+        @Override
+        public void run() {
+            if (isActive.get()) {
+                runImpl();
+            }
+        }
+
+        public void runImpl() {
+            if (isActive.get()) {
+                notifyServiceAboutTick();
+            }
+            handler.postDelayed(this, TICK_INTERVAL_MS);
+        }
+
+        public void setEnabled(boolean enabled) {
+            if (isActive.getAndSet(enabled) == enabled) return;
+            if (enabled) {
+                handler.postDelayed(this, TICK_INTERVAL_MS);
+            } else {
+                handler.removeCallbacks(this);
+            }
+        }
     }
 }

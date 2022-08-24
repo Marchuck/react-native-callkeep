@@ -9,7 +9,8 @@ public enum RequestCodes {
     CALL_BACK(2142),
     MISSED_CALL(2143),
     DENY_CALL(2144),
-    ANSWER_CALL(2145);
+    MUTE_CALL(2145),
+    ANSWER_CALL(2146);
 
     RequestCodes(int code) {
         requestCode = code;

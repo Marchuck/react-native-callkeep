@@ -28,14 +28,14 @@ public class Constants {
 
     public static final String ACTION_CALL_IN_PROGRESS = "ACTION_CALL_IN_PROGRESS";
     public static final String ACTION_TOGGLE_AUDIOROUTE = "ACTION_TOGGLE_AUDIOROUTE";
+    public static final String ACTION_TOGGLE_MUTE = "ACTION_TOGGLE_MUTE";
     public static final String KEY_UUID = "UUID";
-    public static final String KEY_AUDIO_ROUTE_CHANGER = "KEY_AUDIO_ROUTE_CHANGER";
-    public static final String KEY_AUDIO_ROUTE_CHANGER_NOTIFICATION = "notification";
-    public static final String KEY_AUDIO_ROUTE_CHANGER_APP = "app";
+    public static final String KEY_CALL_START_DATE = "CALL_START_DATE";
     public static final String KEY_IS_ONGOING = "IS_ONGOING";
     public static final String KEY_CALL_HANDLE = "CALL_NUMBER";
     public static final String KEY_CALLER_NAME = "CALLER_NAME";
     public static final String KEY_AUDIO_ROUTE = "AUDIO_ROUTE";
+    public static final String KEY_MUTE = "MUTE";
     public static final int FOREGROUND_SERVICE_TYPE_MICROPHONE = 128;
 
 }
