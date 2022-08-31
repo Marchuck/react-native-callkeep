@@ -18,7 +18,6 @@
 package io.wazo.callkeep;
 
 import static io.wazo.callkeep.CallStatusHelper.toggleAudioRouteIntent;
-import static io.wazo.callkeep.CallStatusHelper.toggleMuteIntent;
 import static io.wazo.callkeep.Constants.ACTION_ANSWER_CALL;
 import static io.wazo.callkeep.Constants.ACTION_AUDIO_SESSION;
 import static io.wazo.callkeep.Constants.ACTION_CHECK_REACHABILITY;
@@ -37,6 +36,7 @@ import static io.wazo.callkeep.Constants.ACTION_WAKE_APP;
 import static io.wazo.callkeep.Constants.EXTRA_CALLER_NAME;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_NUMBER;
 import static io.wazo.callkeep.Constants.EXTRA_CALL_UUID;
+import static io.wazo.callkeep.Constants.KEY_AUDIO_ROUTE;
 import static io.wazo.callkeep.Constants.KEY_CALLER_NAME;
 import static io.wazo.callkeep.Constants.KEY_CALL_HANDLE;
 import static io.wazo.callkeep.Constants.KEY_CALL_START_DATE;
@@ -622,18 +622,19 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
     public void setMutedCall(String uuid, boolean shouldMute) {
         Log.d(TAG, "[RNCallKeepModule] setMutedCall, uuid: " + uuid + ", shouldMute: " + (shouldMute ? "true" : "false"));
         VoiceConnection conn = VoiceConnectionService.getConnection(uuid);
-        if (uuid == null) {
+        if (uuid == null || conn == null) {
             Log.w(TAG, "[RNCallKeepModule] setMutedCall ignored because no connection found, uuid: " + uuid);
             return;
         }
         setMutedCallNative(conn, shouldMute);
-        notifyCallStatusService(uuid, conn, false);
+        //notifyCallStatusService(uuid, conn, false);
     }
 
     public static void setMutedCallNative(@Nullable String uuid, boolean shouldMute) {
         VoiceConnection connection = VoiceConnectionService.getConnection(uuid);
-        setMutedCallNative(connection, shouldMute);
-
+        if (connection != null) {
+            setMutedCallNative(connection, shouldMute);
+        }
     }
 
     public static void setMutedCallNative(@NonNull VoiceConnection conn, boolean shouldMute) {
@@ -657,24 +658,27 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void toggleAudioRouteSpeaker(String uuid, boolean routeSpeaker) {
         Log.d(TAG, "[RNCallKeepModule] toggleAudioRouteSpeaker, uuid: " + uuid + ", routeSpeaker: " + (routeSpeaker ? "true" : "false"));
-        VoiceConnection conn = (VoiceConnection) VoiceConnectionService.getConnection(uuid);
+        VoiceConnection conn = VoiceConnectionService.getConnection(uuid);
         if (conn == null) {
             Log.w(TAG, "[RNCallKeepModule] toggleAudioRouteSpeaker ignored because no connection found, uuid: " + uuid);
             return;
         }
+        int currentState = conn.getCallAudioRoute();
         final int state;
         if (routeSpeaker) {
             state = CallAudioState.ROUTE_SPEAKER;
         } else {
             state = CallAudioState.ROUTE_EARPIECE;
         }
+        Log.d(TAG, "toggleAudioRouteSpeaker: current: " + currentState + ", new state: " + state);
         setCallAudioState(uuid, state);
 
-        notifyCallStatusService(uuid, conn, true);
+        notifyCallStatusService(uuid, conn, state);
     }
+
     @SuppressLint("NewApi")
     public static void setCallAudioState(String uuid, int callAudioState) {
-        VoiceConnection conn = (VoiceConnection) VoiceConnectionService.getConnection(uuid);
+        VoiceConnection conn = VoiceConnectionService.getConnection(uuid);
         if (conn == null) {
             Log.w(TAG, "[RNCallKeepModule] toggleAudioRouteSpeaker ignored because no connection found, uuid: " + uuid);
             return;
@@ -696,12 +700,14 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
         try {
             VoiceConnection conn = VoiceConnectionService.getConnection(uuid);
             if (conn == null) {
+                Log.d(TAG, "[RNCallKeepModule] cannot set audio route, for uuid=" + uuid);
                 return;
             }
             if (audioRoute.equals("Bluetooth")) {
                 Log.d(TAG, "[RNCallKeepModule] setting audio route: Bluetooth");
                 conn.setAudioRoute(CallAudioState.ROUTE_BLUETOOTH);
                 conn.updateAudioRoute(CallAudioState.ROUTE_BLUETOOTH);
+                notifyCallStatusService(uuid, conn, CallAudioState.ROUTE_BLUETOOTH);
                 promise.resolve(true);
                 return;
             }
@@ -709,6 +715,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                 Log.d(TAG, "[RNCallKeepModule] setting audio route: Headset");
                 conn.setAudioRoute(CallAudioState.ROUTE_WIRED_HEADSET);
                 conn.updateAudioRoute(CallAudioState.ROUTE_WIRED_HEADSET);
+                notifyCallStatusService(uuid, conn, CallAudioState.ROUTE_WIRED_HEADSET);
                 promise.resolve(true);
                 return;
             }
@@ -716,12 +723,14 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                 Log.d(TAG, "[RNCallKeepModule] setting audio route: Speaker");
                 conn.setAudioRoute(CallAudioState.ROUTE_SPEAKER);
                 conn.updateAudioRoute(CallAudioState.ROUTE_SPEAKER);
+                notifyCallStatusService(uuid, conn, CallAudioState.ROUTE_SPEAKER);
                 promise.resolve(true);
                 return;
             }
             Log.d(TAG, "[RNCallKeepModule] setting audio route: Wired/Earpiece");
             conn.setAudioRoute(CallAudioState.ROUTE_WIRED_OR_EARPIECE);
             conn.updateAudioRoute(CallAudioState.ROUTE_WIRED_OR_EARPIECE);
+            notifyCallStatusService(uuid, conn, CallAudioState.ROUTE_WIRED_OR_EARPIECE);
             promise.resolve(true);
         } catch (Exception e) {
             promise.reject("SetAudioRoute", e.getMessage());
@@ -729,36 +738,27 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * @param uuid
-     * @param conn
-     * @param routeChanged - if true(trigger audio route intent, mute intent otherwise)
+     * @param uuid - identifier of connection
+     * @param conn - connection associated with uuid
+     * @param audioRoute - new audio route (either SPEAKER / EARPIECE)
      */
-    private void notifyCallStatusService(@NonNull String uuid, @NonNull VoiceConnection conn, boolean routeChanged) {
+    private void notifyCallStatusService(
+            @NonNull String uuid,
+            @NonNull VoiceConnection conn,
+            int audioRoute
+    ) {
         Context context = getAppContext();
         if (context == null) return;
         Bundle extras = new Bundle();
         extras.putString(KEY_UUID, uuid);
         extras.putString(KEY_CALL_HANDLE, conn.getCallNumber());
         extras.putString(KEY_CALLER_NAME, conn.getCallerName());
+        extras.putInt(KEY_AUDIO_ROUTE, audioRoute);
         Date date = conn.getStartedCallDate();
-        Log.w(TAG, "notifyCallStatusService: " + date);
         if (date != null) {
             extras.putSerializable(KEY_CALL_START_DATE, date);
         }
-        final Intent intent;
-        if (routeChanged) {
-            intent = toggleAudioRouteIntent(
-                    context,
-                    extras
-            );
-        } else {
-            intent = toggleMuteIntent(
-                    context,
-                    extras,
-                    conn.getCallAudioRouteOrDefault(),
-                    conn.isMuted()
-            );
-        }
+        final Intent intent = toggleAudioRouteIntent(context, extras);
         ContextCompat.startForegroundService(context, intent);
     }
 
@@ -1200,7 +1200,7 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule {
                         notifyCallStatusService(
                                 uuid,
                                 conn,
-                                true
+                                CallAudioState.ROUTE_WIRED_OR_EARPIECE
                         );
                     }
                     sendEventToJS("RNCallKeepPerformAnswerCallAction", args);

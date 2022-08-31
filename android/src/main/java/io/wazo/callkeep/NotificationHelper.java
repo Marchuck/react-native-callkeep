@@ -23,8 +23,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
-import com.facebook.react.bridge.ReadableMap;
-
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.Date;
@@ -43,11 +41,10 @@ public class NotificationHelper {
 
     @DrawableRes
     private int provideSmallIcon() {
-        ReadableMap settings = VoiceConnectionService.getForegroundSettings(context);
-        if (settings == null || !settings.hasKey("notificationIcon")) {
+        String iconName = ForegroundSettingsHelper.getStringFlagValue(context, "notificationIcon");
+        if (iconName == null) {
             return provideLauncherIcon();
         }
-        String iconName = settings.getString("notificationIcon");
         Resources resources = context.getResources();
         int id = resources.getIdentifier(iconName, "mipmap", context.getPackageName());
         if (id != NO_ICON) return id;
@@ -78,7 +75,7 @@ public class NotificationHelper {
 
         int audioRoute = serviceExtras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
 
-        final boolean isEarpiece = audioRoute == CallAudioState.ROUTE_EARPIECE;
+        final boolean isEarpiece = audioRoute != CallAudioState.ROUTE_SPEAKER;
         final PendingIntent toggleSpeakersPendingIntent = toggleSpeakers.asPendingIntent(context, serviceExtras);
 
         boolean shouldMute = serviceExtras.getBoolean(KEY_MUTE, false);
@@ -139,13 +136,10 @@ public class NotificationHelper {
 
     @NonNull
     private InCallNotificationBridge resolveNotificationBridgeIfAny() {
-        final ReadableMap settings = VoiceConnectionService.getForegroundSettings(context);
+        final String className = ForegroundSettingsHelper.getStringFlagValue(context, "notificationAppearanceClass");
 
         ErrorFactory factory = IllegalStateException::new;
 
-        if (settings == null || !settings.hasKey("notificationAppearanceClass"))
-            throw factory.create("'notificationAppearanceClass' should be present");
-        String className = settings.getString("notificationAppearanceClass");
         if (className == null) throw factory.create("'notificationAppearanceClass' missing");
         try {
             return (InCallNotificationBridge) Class.forName(className).newInstance();

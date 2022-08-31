@@ -646,19 +646,13 @@ public class VoiceConnectionService extends ConnectionService {
                 return START_STICKY;
             case ACTION_TOGGLE_AUDIOROUTE:
                 if (uuid == null) break;
-                int audioRoute = CallAudioState.ROUTE_EARPIECE;
+                int audioRoute = CallAudioState.ROUTE_WIRED_OR_EARPIECE;
                 if (conn != null) {
                     conn.setTickerEnabled(false);
-                    audioRoute = conn.getCallAudioRouteOrDefault();
-                    if (audioRoute == CallAudioState.ROUTE_EARPIECE) {
-                        audioRoute = CallAudioState.ROUTE_SPEAKER;
-                    } else {
-                        audioRoute = CallAudioState.ROUTE_EARPIECE;
-                    }
-                    conn.updateAudioRoute(audioRoute);
+                    audioRoute = serviceExtras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_WIRED_OR_EARPIECE);
                     RNCallKeepModule.setCallAudioState(uuid, audioRoute);
                 }
-                Log.w(TAG, "ACTION_TOGGLE_AUDIOROUTE: " + audioRoute);
+                Log.w(TAG, "ACTION_TOGGLE_AUDIOROUTE: " + VoiceConnection.audioRouteReadable(audioRoute));
 
                 serviceExtras.putInt(KEY_AUDIO_ROUTE, audioRoute);
                 onCallInProgress(serviceExtras);
@@ -670,7 +664,7 @@ public class VoiceConnectionService extends ConnectionService {
                 int route = CallAudioState.ROUTE_EARPIECE;
                 if (conn != null) {
                     conn.setTickerEnabled(false);
-                    route = conn.getCallAudioRouteOrDefault();
+                    route = conn.getCallAudioRoute();
                 }
                 Log.w(TAG, "ACTION_CALL_IN_PROGRESS: " + route);
                 serviceExtras.putInt(KEY_AUDIO_ROUTE, route);
@@ -704,11 +698,9 @@ public class VoiceConnectionService extends ConnectionService {
         stopSelf();
     }
 
-
+    @Nullable
     private String resolveChannelId() {
-        ReadableMap map = VoiceConnectionService.getForegroundSettings(this);
-        if (map == null) return null;
-        return map.getString("channelId");
+        return ForegroundSettingsHelper.getStringFlagValue(this, "channelId");
     }
 
     private void onCallInProgress(@NonNull Bundle serviceExtras) {
@@ -727,7 +719,9 @@ public class VoiceConnectionService extends ConnectionService {
 
     private void attemptFinishPendingIncomingCalls() {
         try {
-            Class<?> klazz = Class.forName("com.comms.ActiveCallIndicationService");
+            String className = ForegroundSettingsHelper.getStringFlagValue(this, "serviceIndicationClass");
+            if (className == null) return;
+            Class<?> klazz = Class.forName(className);
             stopService(new Intent(getApplicationContext(), klazz));
         } catch (ClassNotFoundException e) {
             Log.e(TAG, "attemptFinishPendingIncomingCalls: ", e);
@@ -739,11 +733,15 @@ public class VoiceConnectionService extends ConnectionService {
         return (context, extras) -> {
             int route = extras.getInt(KEY_AUDIO_ROUTE, CallAudioState.ROUTE_EARPIECE);
             final int requestCode;
-            if (route == CallAudioState.ROUTE_EARPIECE) {
-                requestCode = RequestCodes.ROUTE_SPEAKER.requestCode;
-            } else {
+            final int targetRoute;
+            if (route == CallAudioState.ROUTE_SPEAKER) {
                 requestCode = RequestCodes.ROUTE_EARPIECE.requestCode;
+                targetRoute = CallAudioState.ROUTE_WIRED_OR_EARPIECE;
+            } else {
+                requestCode = RequestCodes.ROUTE_SPEAKER.requestCode;
+                targetRoute = CallAudioState.ROUTE_SPEAKER;
             }
+            extras.putInt(KEY_AUDIO_ROUTE, targetRoute);
             Intent intent = toggleAudioRouteIntent(context, extras);
             return getForegroundServiceCompat(context, requestCode, intent);
         };
@@ -765,20 +763,10 @@ public class VoiceConnectionService extends ConnectionService {
             contentIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             contentIntent.setAction(Intent.ACTION_VIEW);
 
-            ReadableMap foregroundSettings = VoiceConnectionService.getForegroundSettings(context);
-            String defaultDeeplinkScheme = "rn-callkeep";
-            final String deeplinkScheme;
-            if (foregroundSettings == null) {
-                deeplinkScheme = defaultDeeplinkScheme;
-            } else {
-                String scheme = foregroundSettings.getString("deeplinkScheme");
-                if (scheme == null) {
-                    deeplinkScheme = defaultDeeplinkScheme;
-                } else {
-                    deeplinkScheme = scheme;
-                }
+            String deeplinkScheme = ForegroundSettingsHelper.getStringFlagValue(context, "deeplinkScheme");
+            if (deeplinkScheme == null) {
+                deeplinkScheme = "rn-callkeep";
             }
-
             String deeplink = new DeeplinkBuilder(deeplinkScheme, "return-to-app", bundle).toString();
             contentIntent.setData(Uri.parse(deeplink));
             return PendingIntent.getActivity(
@@ -802,11 +790,7 @@ public class VoiceConnectionService extends ConnectionService {
     }
 
     private static String resolveCallingClassName(Context context) {
-        ReadableMap foregroundSettings = VoiceConnectionService.getForegroundSettings(context);
-        if (foregroundSettings == null) {
-            return getFallbackActivityLauncherClassName(context);
-        }
-        String claasName = foregroundSettings.getString("callingActivityClass");
+        String claasName = ForegroundSettingsHelper.getStringFlagValue(context, "callingActivityClass");
         if (claasName == null) {
             return getFallbackActivityLauncherClassName(context);
         } else {

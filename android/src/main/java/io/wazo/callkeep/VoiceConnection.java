@@ -68,7 +68,7 @@ public class VoiceConnection extends Connection {
     private boolean isMuted = false;
     private boolean answered = false;
     private boolean rejected = false;
-    private volatile int callAudioRoute = CallAudioState.ROUTE_EARPIECE;
+    private volatile int callAudioRoute = CallAudioState.ROUTE_WIRED_OR_EARPIECE;
     private String uuid;
     private HashMap<String, String> handle;
     private final Context context;
@@ -76,11 +76,13 @@ public class VoiceConnection extends Connection {
     private volatile Date startedCallDate = null;
     private static final String TAG = "RNCallKeep";
 
+    private final boolean callDurationVisible;
+
     private final TickerRunnable tickerRunnable = new TickerRunnable();
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     public void setTickerEnabled(boolean enabled) {
-        Log.w(TAG, "setTickerEnabled(" + enabled + ")");
+        if (!callDurationVisible) return;
         tickerRunnable.setEnabled(enabled);
     }
 
@@ -88,6 +90,7 @@ public class VoiceConnection extends Connection {
         super();
         this.handle = handle;
         this.context = context;
+        this.callDurationVisible = resolveCallDurationVisible(context);
 
         String number = handle.get(EXTRA_CALL_NUMBER);
         String name = handle.get(EXTRA_CALLER_NAME);
@@ -100,8 +103,12 @@ public class VoiceConnection extends Connection {
         }
     }
 
+    private boolean resolveCallDurationVisible(Context context) {
+        return ForegroundSettingsHelper.getBooleanFlagValue(context, "callDurationVisible", false);
+    }
+
     private void notifyServiceAboutTick() {
-        if (context == null || uuid == null) {
+        if (context == null || uuid == null || !callDurationVisible) {
             Log.w(TAG, "sendCallRequestToService( " + context + ", " + uuid + ")");
             return;
         }
@@ -216,7 +223,7 @@ public class VoiceConnection extends Connection {
         return startedCallDate;
     }
 
-    public synchronized int getCallAudioRouteOrDefault() {
+    public synchronized int getCallAudioRoute() {
         return callAudioRoute;
     }
 
@@ -383,12 +390,16 @@ public class VoiceConnection extends Connection {
         setConnectionCapabilities(getConnectionCapabilities() | Connection.CAPABILITY_HOLD);
         setAudioModeIsVoip(true);
 
-        startedCallDate = new Date();
-        tickerRunnable.isActive.set(true);
+        if (callDurationVisible) {
+            startedCallDate = new Date();
+            tickerRunnable.isActive.set(true);
+        }
         sendCallRequestToActivity(ACTION_ANSWER_CALL, handle);
         sendCallRequestToActivity(ACTION_AUDIO_SESSION, handle);
         Log.d(TAG, "[VoiceConnection] onAnswer executed");
-        handler.postDelayed(tickerRunnable, TICK_INTERVAL_MS);
+        if (callDurationVisible) {
+            handler.postDelayed(tickerRunnable, TICK_INTERVAL_MS);
+        }
     }
 
     private void _onReject(int rejectReason, String replyMessage) {
@@ -441,20 +452,24 @@ public class VoiceConnection extends Connection {
     }
 
     public void updateAudioRoute(int audioRoute) {
+        int oldAudioRoute = callAudioRoute;
+        if (oldAudioRoute == audioRoute) return;
         this.callAudioRoute = audioRoute;
-        Log.w(TAG, "updateAudioRoute: " + audioRouteReadable(audioRoute));
+        HashMap<String, String> attributeMap = new HashMap<>();
+        attributeMap.put("output", CallAudioState.audioRouteToString(audioRoute));
+        sendCallRequestToActivity(ACTION_DID_CHANGE_AUDIO_ROUTE, attributeMap);
     }
 
-    private static String audioRouteReadable(int callAudioRoute) {
-        if (callAudioRoute == CallAudioState.ROUTE_EARPIECE) {
-            return "ROUTE_EARPIECE";
+    public static String audioRouteReadable(int callAudioRoute) {
+        String targetLabel = "Phone";
+        if (callAudioRoute == CallAudioState.ROUTE_EARPIECE || callAudioRoute == CallAudioState.ROUTE_WIRED_OR_EARPIECE) {
+            targetLabel = "Phone";
         } else if (callAudioRoute == CallAudioState.ROUTE_SPEAKER) {
-            return "ROUTE_SPEAKER";
-        } else return "unsupported route " + callAudioRoute;
-    }
-
-    public void updateIsMuted(boolean muted) {
-        this.isMuted = muted;
+            targetLabel = "Speaker";
+        } else {
+            Log.w(TAG, "audioRouteReadable: unsupported route " + callAudioRoute);
+        }
+        return targetLabel;
     }
 
     private class TickerRunnable implements Runnable {
@@ -463,7 +478,7 @@ public class VoiceConnection extends Connection {
 
         @Override
         public void run() {
-            if (isActive.get()) {
+            if (callDurationVisible && isActive.get()) {
                 runImpl();
             }
         }
